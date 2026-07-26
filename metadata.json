@@ -1,0 +1,6 @@
+{
+  "name": "ScreenPilot",
+  "description": "Screen capture assistant and practice-question analyzer using Google Gemini API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
