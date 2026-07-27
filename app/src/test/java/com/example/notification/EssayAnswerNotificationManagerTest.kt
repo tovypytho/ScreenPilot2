@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -39,7 +40,7 @@ class EssayAnswerNotificationManagerTest {
     }
 
     @Test
-    fun essayAnswerUsesBigTextAndPrivateVisibility() {
+    fun essayAnswerUsesPublicBigTextReplacementAndTapIntent() {
         val answer = "Fotosintesis mengubah energi cahaya menjadi energi kimia yang disimpan dalam bentuk glukosa."
         val result = EssayAnswerNotificationManager.showAnswer(context, answer)
         assertTrue(result is EssayNotificationResult.Posted)
@@ -47,8 +48,20 @@ class EssayAnswerNotificationManagerTest {
         val active = notificationManager.activeNotifications
         assertEquals(1, active.size)
         assertEquals(EssayAnswerNotificationManager.NOTIFICATION_ID, active[0].id)
-        assertEquals(Notification.VISIBILITY_PRIVATE, active[0].notification.visibility)
-        assertEquals(answer, active[0].notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
+
+        val notification = active[0].notification
+        assertEquals(Notification.VISIBILITY_PUBLIC, notification.visibility)
+        assertEquals(answer, notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
+        assertNotNull(notification.contentIntent)
+
+        val publicVersion = notification.publicVersion
+        assertNotNull(publicVersion)
+        assertEquals(Notification.VISIBILITY_PUBLIC, publicVersion.visibility)
+        assertEquals(
+            answer,
+            publicVersion.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        )
+        assertNotNull(publicVersion.contentIntent)
     }
 
     @Test
