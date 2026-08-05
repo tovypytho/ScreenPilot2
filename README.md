@@ -4,7 +4,8 @@ ScreenPilot is a native Android (Kotlin + Jetpack Compose) screen-analysis assis
 
 Current answer modes:
 
-- **Multiple choice**: ScreenPilot returns the selected answer index through the existing compact overlay popup.
+- **Single-answer multiple choice**: ScreenPilot recognizes radio-style/circular controls and returns one selected answer index through the compact overlay popup.
+- **Multiple-select questions**: ScreenPilot recognizes checkbox-style/square controls or explicit multi-answer wording and returns all correct indices in a compact form such as `(1,2)`.
 - **Free response / essay**: ScreenPilot posts a concise answer silently to the Android notification shade.
 - **Unclear / incomplete capture**: no answer is fabricated and no API-key failover is triggered solely because the visible question is incomplete.
 

@@ -25,6 +25,25 @@ class ResponseParserTest {
     }
 
     @Test
+    fun multipleSelectStructuredResponseIsAcceptedAndSorted() {
+        val result = ResponseParser.parse(
+            """{"question_type":"MULTIPLE_SELECT","answer_indices":[5,3],"confidence":0.88}"""
+        )
+        assertTrue(result is ParsedAnswer.MultipleSelect)
+        result as ParsedAnswer.MultipleSelect
+        assertEquals(listOf(3, 5), result.answerIndices)
+        assertEquals(0.88, result.confidence ?: 0.0, 0.0001)
+    }
+
+    @Test
+    fun multipleSelectDuplicateIndicesAreNormalized() {
+        val result = ResponseParser.parse(
+            """{"question_type":"MULTIPLE_SELECT","answer_indices":[2,2,4]}"""
+        ) as ParsedAnswer.MultipleSelect
+        assertEquals(listOf(2, 4), result.answerIndices)
+    }
+
+    @Test
     fun freeResponseStructuredResponseIsAccepted() {
         val result = ResponseParser.parse(
             """{"question_type":"FREE_RESPONSE","answer_text":"Paris","confidence":0.95}"""
@@ -104,6 +123,31 @@ class ResponseParserTest {
     @Test
     fun multipleChoiceStringIndexIsRejected() {
         expectFailure("""{"question_type":"MULTIPLE_CHOICE","answer_index":"3"}""")
+    }
+
+    @Test
+    fun multipleSelectMissingIndicesIsRejected() {
+        expectFailure("""{"question_type":"MULTIPLE_SELECT"}""")
+    }
+
+    @Test
+    fun multipleSelectEmptyIndicesIsRejected() {
+        expectFailure("""{"question_type":"MULTIPLE_SELECT","answer_indices":[]}""")
+    }
+
+    @Test
+    fun multipleSelectOutOfRangeIndexIsRejected() {
+        expectFailure("""{"question_type":"MULTIPLE_SELECT","answer_indices":[1,6]}""")
+    }
+
+    @Test
+    fun multipleSelectDecimalIndexIsRejected() {
+        expectFailure("""{"question_type":"MULTIPLE_SELECT","answer_indices":[1,2.5]}""")
+    }
+
+    @Test
+    fun multipleSelectNonArrayIsRejected() {
+        expectFailure("""{"question_type":"MULTIPLE_SELECT","answer_indices":2}""")
     }
 
     @Test

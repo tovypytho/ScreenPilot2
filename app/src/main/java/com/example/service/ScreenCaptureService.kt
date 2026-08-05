@@ -2258,7 +2258,8 @@ class ScreenCaptureService : Service() {
     ) {
         // A parsed UNCLEAR result is a valid provider response, not a key failure.
         // Presentation depends only on the parsed answer type:
-        // MC -> existing overlay popup, FREE_RESPONSE -> silent notification,
+        // Single MC and multi-select -> existing overlay popup,
+        // FREE_RESPONSE -> silent notification,
         // UNCLEAR -> no fabricated answer and no provider failover.
         val historyQuestionType: String
         val historyAnswerIndex: Int
@@ -2277,6 +2278,23 @@ class ScreenCaptureService : Service() {
                 historyQuestionType = HistoryQuestionType.MULTIPLE_CHOICE
                 historyAnswerIndex = parsed.answerIndex
                 historyAnswerText = null
+            }
+
+            is ParsedAnswer.MultipleSelect -> {
+                val normalizedIndices = parsed.answerIndices.distinct().sorted()
+                val popupText = normalizedIndices.joinToString(
+                    separator = ",",
+                    prefix = "(",
+                    postfix = ")"
+                )
+                val popupResult = showAnswerPopup(popupText, parsed.confidence)
+                if (popupResult is PopupAttachmentResult.Failed) {
+                    lastFailedStage = "PopupAttachmentFailed: ${popupResult.safeReason}"
+                    Log.w(TAG, "Multi-select answer popup attachment failed: ${popupResult.safeReason}")
+                }
+                historyQuestionType = HistoryQuestionType.MULTIPLE_SELECT
+                historyAnswerIndex = 0
+                historyAnswerText = normalizedIndices.joinToString(",")
             }
 
             is ParsedAnswer.FreeResponse -> {
@@ -2469,6 +2487,11 @@ class ScreenCaptureService : Service() {
                     }
 
                     val showBackground = style.popupStyle != com.example.data.PopupStyle.TEXT_ONLY
+                    // A fixed circular popup is appropriate for one-character answers only.
+                    // Multi-select answers such as "(1,2)" automatically use the wrap-content
+                    // branch so they are not clipped even when the user selected Circle style.
+                    val useFixedCircleLayout =
+                        style.popupStyle == com.example.data.PopupStyle.CIRCLE && answer.length == 1
 
                     Box(
                         modifier = Modifier
@@ -2477,7 +2500,7 @@ class ScreenCaptureService : Service() {
                             .testTag("answer_popup"),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (style.popupStyle == com.example.data.PopupStyle.CIRCLE) {
+                        if (useFixedCircleLayout) {
                             val circleSize = (style.fontSizeSp * 2 * style.popupScale).dp
                             Box(
                                 modifier = Modifier

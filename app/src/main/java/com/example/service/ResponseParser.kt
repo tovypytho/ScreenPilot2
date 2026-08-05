@@ -1,5 +1,6 @@
 package com.example.service
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
@@ -8,6 +9,11 @@ sealed interface ParsedAnswer {
 
     data class MultipleChoice(
         val answerIndex: Int,
+        override val confidence: Double?
+    ) : ParsedAnswer
+
+    data class MultipleSelect(
+        val answerIndices: List<Int>,
         override val confidence: Double?
     ) : ParsedAnswer
 
@@ -82,6 +88,11 @@ object ResponseParser {
                     confidence = confidence
                 )
 
+                "MULTIPLE_SELECT" -> ParsedAnswer.MultipleSelect(
+                    answerIndices = parseAnswerIndices(json),
+                    confidence = confidence
+                )
+
                 "FREE_RESPONSE" -> ParsedAnswer.FreeResponse(
                     answerText = parseFreeResponseText(json),
                     confidence = confidence
@@ -90,7 +101,7 @@ object ResponseParser {
                 "UNCLEAR" -> ParsedAnswer.Unclear(confidence = confidence)
 
                 else -> throw IllegalArgumentException(
-                    "question_type must be MULTIPLE_CHOICE, FREE_RESPONSE, or UNCLEAR"
+                    "question_type must be MULTIPLE_CHOICE, MULTIPLE_SELECT, FREE_RESPONSE, or UNCLEAR"
                 )
             }
         } catch (e: IllegalArgumentException) {
@@ -133,6 +144,40 @@ object ResponseParser {
             throw IllegalArgumentException("answer_index $answerIndex is not within the valid 1-5 range")
         }
         return answerIndex
+    }
+
+    private fun parseAnswerIndices(json: JSONObject): List<Int> {
+        val rawIndices = json.opt("answer_indices")
+        if (rawIndices == null || rawIndices == JSONObject.NULL || rawIndices !is JSONArray) {
+            throw IllegalArgumentException("answer_indices is missing or is not a JSON array")
+        }
+        if (rawIndices.length() == 0) {
+            throw IllegalArgumentException("answer_indices must contain at least one answer")
+        }
+        if (rawIndices.length() > 5) {
+            throw IllegalArgumentException("answer_indices cannot contain more than 5 answers")
+        }
+
+        val normalized = linkedSetOf<Int>()
+        for (i in 0 until rawIndices.length()) {
+            val rawIndex = rawIndices.opt(i)
+            if (rawIndex !is Number) {
+                throw IllegalArgumentException("answer_indices[$i] must be a JSON numeric value")
+            }
+            val doubleVal = rawIndex.toDouble()
+            if (!doubleVal.isFinite() || doubleVal % 1.0 != 0.0) {
+                throw IllegalArgumentException("answer_indices[$i] must be a finite integral number")
+            }
+            val answerIndex = doubleVal.toInt()
+            if (answerIndex !in 1..5) {
+                throw IllegalArgumentException(
+                    "answer_indices[$i] value $answerIndex is not within the valid 1-5 range"
+                )
+            }
+            normalized += answerIndex
+        }
+
+        return normalized.sorted()
     }
 
     private fun parseFreeResponseText(json: JSONObject): String {

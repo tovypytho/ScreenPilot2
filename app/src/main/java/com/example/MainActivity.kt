@@ -2256,6 +2256,8 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                                         parsedAnswerInfo = when (parsed) {
                                                             is ParsedAnswer.MultipleChoice ->
                                                                 "Type: Multiple Choice | Index: ${parsed.answerIndex} (Confidence: ${parsed.confidence ?: "N/A"})"
+                                                            is ParsedAnswer.MultipleSelect ->
+                                                                "Type: Multiple Select | Indices: (${parsed.answerIndices.joinToString(",")}) (Confidence: ${parsed.confidence ?: "N/A"})"
                                                             is ParsedAnswer.FreeResponse ->
                                                                 "Type: Free Response | ${parsed.answerText} (Confidence: ${parsed.confidence ?: "N/A"})"
                                                             is ParsedAnswer.Unclear ->
@@ -2821,6 +2823,7 @@ fun HistoryRowItem(entry: HistoryEntry) {
 
     val normalizedType = when (entry.questionType) {
         HistoryQuestionType.MULTIPLE_CHOICE,
+        HistoryQuestionType.MULTIPLE_SELECT,
         HistoryQuestionType.FREE_RESPONSE,
         HistoryQuestionType.UNCLEAR,
         HistoryQuestionType.ERROR -> entry.questionType
@@ -2833,18 +2836,24 @@ fun HistoryRowItem(entry: HistoryEntry) {
 
     val badgeBackground = when (normalizedType) {
         HistoryQuestionType.MULTIPLE_CHOICE,
+        HistoryQuestionType.MULTIPLE_SELECT,
         HistoryQuestionType.FREE_RESPONSE -> Color(0xFFE8F5E9)
         HistoryQuestionType.UNCLEAR -> Color(0xFFFFF4E5)
         else -> Color(0xFFFFEBEE)
     }
     val badgeTextColor = when (normalizedType) {
         HistoryQuestionType.MULTIPLE_CHOICE,
+        HistoryQuestionType.MULTIPLE_SELECT,
         HistoryQuestionType.FREE_RESPONSE -> Color(0xFF2E7D32)
         HistoryQuestionType.UNCLEAR -> Color(0xFF8A5300)
         else -> Color(0xFFC62828)
     }
     val badgeText = when (normalizedType) {
         HistoryQuestionType.MULTIPLE_CHOICE -> "Answer: ${entry.answerIndex}"
+        HistoryQuestionType.MULTIPLE_SELECT -> {
+            val indices = entry.answerText.orEmpty().trim()
+            if (indices.isNotEmpty()) "Answers: ($indices)" else "Multiple answers"
+        }
         HistoryQuestionType.FREE_RESPONSE -> "Essay"
         HistoryQuestionType.UNCLEAR -> "Unclear"
         else -> "Failed"

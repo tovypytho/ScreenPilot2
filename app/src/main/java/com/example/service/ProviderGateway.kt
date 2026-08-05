@@ -85,7 +85,7 @@ fun encodeGeminiInlineImage(jpegBytes: ByteArray): String {
     return Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 }
 
-internal const val QUESTION_ANALYSIS_SYSTEM_INSTRUCTION = """You analyze educational question screenshots and return exactly one structured result. Classify MULTIPLE_CHOICE only when visible selectable answer choices are actually present; set answer_index to the correct choice counted from top to bottom (1 through 5) and set answer_text to an empty string. If the correct visible choice cannot be safely mapped to 1 through 5, classify UNCLEAR. Classify FREE_RESPONSE only when the visible question clearly expects a typed, written, fill-in, calculation, short-answer, or essay response and no selectable choices are present; set answer_index to 0 and put the direct answer in answer_text. If answer choices may be cropped, off-screen, hidden by scrolling, the question is incomplete, or the content is not clear enough to distinguish the format, classify UNCLEAR instead of guessing FREE_RESPONSE; for UNCLEAR set answer_index to 0 and answer_text to an empty string. FREE_RESPONSE answer_text must be in the same language as the question, have no preamble, usually be one to three short sentences and preferably under 320 characters. For a numeric or factual short-answer question, return only the concise value or phrase needed. Never invent an answer for UNCLEAR."""
+internal const val QUESTION_ANALYSIS_SYSTEM_INSTRUCTION = """You analyze educational question screenshots and return exactly one structured result. First determine the interaction type from both the visible control shape and the question wording. MULTIPLE_CHOICE means a single-select question, typically shown with circular radio controls or wording that permits exactly one answer. Set answer_index to the one correct choice counted from top to bottom (1 through 5), set answer_indices to an empty array, and set answer_text to an empty string. MULTIPLE_SELECT means a multi-select question, typically shown with square checkbox controls or wording such as select all, choose more than one, or multiple answers may be correct. Solve the question yourself and return every correct visible choice in answer_indices, sorted from top to bottom, with unique values from 1 through 5; set answer_index to 0 and answer_text to an empty string. Do not assume that controls already shown as checked, filled, or selected are correct; those marks may be a user's previous selection. Use the control shape as a strong UI clue, but prioritize explicit wording when shape and wording conflict. If the selection mode, complete set of choices, or correct choice mapping cannot be determined safely, classify UNCLEAR rather than guessing. Classify FREE_RESPONSE only when the visible question clearly expects a typed, written, fill-in, calculation, short-answer, or essay response and no selectable choices are present; set answer_index to 0, set answer_indices to an empty array, and put the direct answer in answer_text. If answer choices may be cropped, off-screen, hidden by scrolling, the question is incomplete, or the content is not clear enough to distinguish the format, classify UNCLEAR; for UNCLEAR set answer_index to 0, answer_indices to an empty array, and answer_text to an empty string. FREE_RESPONSE answer_text must be in the same language as the question, have no preamble, usually be one to three short sentences and preferably under 320 characters. For a numeric or factual short-answer question, return only the concise value or phrase needed. Never invent an answer for UNCLEAR."""
 
 internal const val SINGLE_IMAGE_USER_INSTRUCTION =
     "Analyze the visible question in this screenshot, classify its answer format, and return the best structured result."
@@ -152,22 +152,34 @@ internal fun buildGeminiImageRequestJson(
                 put("properties", JSONObject().apply {
                     put("question_type", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "MULTIPLE_CHOICE when visible selectable choices are present; FREE_RESPONSE for clearly typed/written answers without choices; UNCLEAR when the question format or complete content is not safely visible.")
+                        put("description", "MULTIPLE_CHOICE for one-answer radio-style questions; MULTIPLE_SELECT for checkbox-style or explicitly multi-answer questions; FREE_RESPONSE for typed/written answers without choices; UNCLEAR when the format or complete content is not safely visible.")
                         put("enum", JSONArray().apply {
                             put("MULTIPLE_CHOICE")
+                            put("MULTIPLE_SELECT")
                             put("FREE_RESPONSE")
                             put("UNCLEAR")
                         })
                     })
                     put("answer_index", JSONObject().apply {
                         put("type", "INTEGER")
-                        put("description", "1 through 5 for MULTIPLE_CHOICE; 0 for FREE_RESPONSE or UNCLEAR.")
+                        put("description", "1 through 5 for MULTIPLE_CHOICE; 0 for MULTIPLE_SELECT, FREE_RESPONSE, or UNCLEAR.")
                         put("minimum", 0)
                         put("maximum", 5)
                     })
+                    put("answer_indices", JSONObject().apply {
+                        put("type", "ARRAY")
+                        put("description", "All correct 1-through-5 choice indices for MULTIPLE_SELECT, sorted and unique; empty array for other question types.")
+                        put("minItems", 0)
+                        put("maxItems", 5)
+                        put("items", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("minimum", 1)
+                            put("maximum", 5)
+                        })
+                    })
                     put("answer_text", JSONObject().apply {
                         put("type", "STRING")
-                        put("description", "Direct concise answer for FREE_RESPONSE; empty string for MULTIPLE_CHOICE or UNCLEAR.")
+                        put("description", "Direct concise answer for FREE_RESPONSE; empty string for MULTIPLE_CHOICE, MULTIPLE_SELECT, or UNCLEAR.")
                     })
                     put("confidence", JSONObject().apply {
                         put("type", "NUMBER")
@@ -179,6 +191,7 @@ internal fun buildGeminiImageRequestJson(
                 put("required", JSONArray().apply {
                     put("question_type")
                     put("answer_index")
+                    put("answer_indices")
                     put("answer_text")
                 })
             })

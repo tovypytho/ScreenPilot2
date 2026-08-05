@@ -143,7 +143,7 @@ class ProviderGatewayTest {
     }
 
     @Test
-    fun typedQuestionSchemaIncludesAllThreeQuestionTypes() {
+    fun typedQuestionSchemaIncludesAllFourQuestionTypes() {
         val contextObj = AnalysisRequestContext(
             provider = AiProvider.GEMINI,
             requestedModel = "gemini-test",
@@ -162,15 +162,25 @@ class ProviderGatewayTest {
         val enumValues = questionType.getJSONArray("enum")
 
         assertEquals("MULTIPLE_CHOICE", enumValues.getString(0))
-        assertEquals("FREE_RESPONSE", enumValues.getString(1))
-        assertEquals("UNCLEAR", enumValues.getString(2))
+        assertEquals("MULTIPLE_SELECT", enumValues.getString(1))
+        assertEquals("FREE_RESPONSE", enumValues.getString(2))
+        assertEquals("UNCLEAR", enumValues.getString(3))
         assertTrue(properties.has("answer_index"))
+        assertTrue(properties.has("answer_indices"))
         assertTrue(properties.has("answer_text"))
         assertEquals(0, properties.getJSONObject("answer_index").getInt("minimum"))
         val required = schema.getJSONArray("required")
         assertEquals("question_type", required.getString(0))
         assertEquals("answer_index", required.getString(1))
-        assertEquals("answer_text", required.getString(2))
+        assertEquals("answer_indices", required.getString(2))
+        assertEquals("answer_text", required.getString(3))
+        val answerIndicesSchema = properties.getJSONObject("answer_indices")
+        assertEquals("ARRAY", answerIndicesSchema.getString("type"))
+        assertEquals(1, answerIndicesSchema.getJSONObject("items").getInt("minimum"))
+        assertEquals(5, answerIndicesSchema.getJSONObject("items").getInt("maximum"))
+        assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("circular radio", ignoreCase = true))
+        assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("square checkbox", ignoreCase = true))
+        assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("Do not assume", ignoreCase = true))
         assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("cropped", ignoreCase = true))
         assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("UNCLEAR"))
     }
