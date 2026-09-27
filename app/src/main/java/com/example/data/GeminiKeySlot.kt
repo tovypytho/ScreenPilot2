@@ -23,7 +23,10 @@ data class GeminiKeySlot(
     val healthStatus: String = GeminiKeyHealth.NOT_TESTED.name,
     val lastSuccessTimestamp: Long = 0L,
     val lastFailureType: String = "",
-    val cooldownExpiration: Long = 0L
+    val cooldownExpiration: Long = 0L,
+    val lastCheckedTimestamp: Long = 0L,
+    val lastCheckStatus: String = "",
+    val lastCheckReason: String = ""
 )
 
 object GeminiKeySlotSerializer {
@@ -40,6 +43,9 @@ object GeminiKeySlotSerializer {
                 put("lastSuccessTimestamp", slot.lastSuccessTimestamp)
                 put("lastFailureType", slot.lastFailureType)
                 put("cooldownExpiration", slot.cooldownExpiration)
+                put("lastCheckedTimestamp", slot.lastCheckedTimestamp)
+                put("lastCheckStatus", slot.lastCheckStatus)
+                put("lastCheckReason", slot.lastCheckReason)
             }
             array.put(obj)
         }
@@ -65,7 +71,10 @@ object GeminiKeySlotSerializer {
                         healthStatus = normalizedHealth,
                         lastSuccessTimestamp = obj.optLong("lastSuccessTimestamp", 0L),
                         lastFailureType = obj.optString("lastFailureType", ""),
-                        cooldownExpiration = obj.optLong("cooldownExpiration", 0L)
+                        cooldownExpiration = obj.optLong("cooldownExpiration", 0L),
+                        lastCheckedTimestamp = obj.optLong("lastCheckedTimestamp", 0L),
+                        lastCheckStatus = obj.optString("lastCheckStatus", ""),
+                        lastCheckReason = obj.optString("lastCheckReason", "")
                     )
                 )
             }

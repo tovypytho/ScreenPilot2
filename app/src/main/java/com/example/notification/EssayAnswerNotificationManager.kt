@@ -24,9 +24,7 @@ sealed interface EssayNotificationResult {
 /**
  * Posts the latest free-response answer to a dedicated silent notification.
  *
- * Android 15 hides ordinary notification contents while MediaProjection screen sharing is active.
- * ScreenPilot intentionally supplies a PUBLIC publicVersion containing the same answer so the
- * answer remains readable in the notification shade while the capture session stays active.
+ * The lock-screen replacement never contains the answer text.
  */
 object EssayAnswerNotificationManager {
 
@@ -77,12 +75,7 @@ object EssayAnswerNotificationManager {
             }
 
             val contentIntent = createOpenAppPendingIntent(context)
-            val publicNotification = buildPublicNotification(
-                context = context,
-                shortenedPreview = shortenedPreview,
-                fullAnswer = normalizedAnswer,
-                contentIntent = contentIntent
-            )
+            val publicNotification = buildPublicNotification(context, contentIntent)
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -97,9 +90,7 @@ object EssayAnswerNotificationManager {
                 .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
                 .setContentIntent(contentIntent)
-                // ScreenPilot is itself a MediaProjection host. Android 15 redacts notification
-                // contents during screen sharing unless a public replacement is supplied.
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .setPublicVersion(publicNotification)
                 .build()
 
@@ -126,18 +117,12 @@ object EssayAnswerNotificationManager {
 
     private fun buildPublicNotification(
         context: Context,
-        shortenedPreview: String,
-        fullAnswer: String,
         contentIntent: PendingIntent
     ): Notification {
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("ScreenPilot")
-            .setContentText(shortenedPreview)
-            .setStyle(
-                NotificationCompat.BigTextStyle()
-                    .bigText(fullAnswer)
-            )
+            .setContentText("Buka ponsel untuk melihat jawaban essay")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
             .setOnlyAlertOnce(true)

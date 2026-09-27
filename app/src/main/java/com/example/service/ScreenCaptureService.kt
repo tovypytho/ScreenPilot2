@@ -75,6 +75,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
 import com.example.clipboard.EssayAnswerClipboardManager
 import com.example.clipboard.EssayClipboardResult
+import com.example.notification.EssayAnswerNotificationManager
+import com.example.notification.EssayNotificationResult
 import com.example.data.AppDatabase
 import com.example.data.HistoryEntry
 import com.example.data.HistoryRepository
@@ -1287,6 +1289,9 @@ class ScreenCaptureService : Service() {
             val apiQuality = preferencesRepository.apiJpegQualityFlow.first()
             val maxDim = preferencesRepository.screenshotMaxDimensionFlow.first()
 
+            return withContext(Dispatchers.Default) {
+            var scaledBitmap: Bitmap? = null
+            try {
             val galleryJpegBytes = if (saveEnabled) {
                 java.io.ByteArrayOutputStream().use { stream ->
                     val success = bitmap.compress(Bitmap.CompressFormat.JPEG, galleryQuality, stream)
@@ -1297,9 +1302,10 @@ class ScreenCaptureService : Service() {
                 null
             }
 
-            val scaledBitmap = resizeBitmap(bitmap, maxDim)
+            val resized = resizeBitmap(bitmap, maxDim)
+            scaledBitmap = resized
             val apiJpegBytes = java.io.ByteArrayOutputStream().use { stream ->
-                val success = scaledBitmap.compress(Bitmap.CompressFormat.JPEG, apiQuality, stream)
+                val success = resized.compress(Bitmap.CompressFormat.JPEG, apiQuality, stream)
                 if (!success) throw Exception("API JPEG compression failed")
                 stream.toByteArray()
             }
@@ -1307,14 +1313,9 @@ class ScreenCaptureService : Service() {
             val width = bitmap.width
             val height = bitmap.height
 
-            if (scaledBitmap != bitmap) {
-                scaledBitmap.recycle()
-            }
-            bitmap.recycle()
-
             lastJpegSize = "${String.format(java.util.Locale.US, "%.2f", apiJpegBytes.size / 1024.0)} KB"
 
-            return PreparedScreenshot(
+            PreparedScreenshot(
                 apiJpegBytes = apiJpegBytes,
                 galleryJpegBytes = galleryJpegBytes,
                 width = width,
@@ -1322,6 +1323,11 @@ class ScreenCaptureService : Service() {
                 capturedAt = System.currentTimeMillis(),
                 purpose = purpose
             )
+            } finally {
+                if (scaledBitmap != null && scaledBitmap !== bitmap) scaledBitmap.recycle()
+                bitmap.recycle()
+            }
+            }
         } finally {
             setOverlayVisibility(true)
         }
@@ -1774,8 +1780,8 @@ class ScreenCaptureService : Service() {
 
             val eligibleSlots = enabledSlots.filter { slot ->
                 if (skipCooling && slot.cooldownExpiration > now) return@filter false
-                if (skipAuth && slot.lastFailureType == "401") return@filter false
-                if (skipPerm && slot.lastFailureType == "403") return@filter false
+                if (skipAuth && slot.healthStatus == GeminiKeyHealth.AUTH_FAILED.name) return@filter false
+                if (skipPerm && slot.healthStatus == GeminiKeyHealth.PERMISSION_DENIED.name) return@filter false
                 true
             }
 
@@ -1783,43 +1789,13 @@ class ScreenCaptureService : Service() {
                 throw LocalPreparationException("No eligible Gemini API keys available. Please check your key pool.")
             }
 
-            val strategy = failoverPrefReader.safeKeyStrategy()
-            val lastSuccessId = failoverPrefReader.safeLastSuccessfulKeyId() ?: ""
-            val lastRrIndex = failoverPrefReader.safeRoundRobinLastKeyIndex()
-
-            val orderedSlots = when (strategy) {
-                "Sticky Success with Sequential Failover" -> {
-                    val stickyIndex = eligibleSlots.indexOfFirst { it.id == lastSuccessId }
-                    if (stickyIndex >= 0) {
-                        val list = mutableListOf<GeminiKeySlot>()
-                        list.add(eligibleSlots[stickyIndex])
-                        for (i in eligibleSlots.indices) {
-                            if (i != stickyIndex) {
-                                list.add(eligibleSlots[i])
-                            }
-                        }
-                        list
-                    } else {
-                        eligibleSlots
-                    }
-                }
-                "Always Start at Key 1" -> {
-                    eligibleSlots
-                }
-                "Round Robin" -> {
-                    if (eligibleSlots.isNotEmpty()) {
-                        val startIndex = (lastRrIndex + 1) % eligibleSlots.size
-                        val list = mutableListOf<GeminiKeySlot>()
-                        for (i in eligibleSlots.indices) {
-                            val idx = (startIndex + i) % eligibleSlots.size
-                            list.add(eligibleSlots[idx])
-                        }
-                        list
-                    } else {
-                        eligibleSlots
-                    }
-                }
-                else -> eligibleSlots
+            val orderedSlots = try {
+                preferencesRepository.reserveKeyOrder(eligibleSlots)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Log.w(TAG, "Key rotation state unavailable; using priority order: ${e.javaClass.simpleName}")
+                eligibleSlots
             }
 
             val maxAttempts = failoverPrefReader.safeMaxKeyAttempts()
@@ -1893,17 +1869,9 @@ class ScreenCaptureService : Service() {
 
                 if (rawRes != null && parsedAnswer != null) {
                     val successfulId = slot.id
-                    val strategySnapshot = strategy
-                    val eligibleSlotsSnapshot = eligibleSlots
                     launchNonCritical("updateKeySuccessMetadata") {
                         updateSlotSuccess(successfulId)
                         preferencesRepository.setLastSuccessfulKeyId(successfulId)
-                        if (strategySnapshot == "Round Robin") {
-                            val origIndex = eligibleSlotsSnapshot.indexOfFirst { it.id == successfulId }
-                            if (origIndex >= 0) {
-                                preferencesRepository.setRoundRobinLastKeyIndex(origIndex)
-                            }
-                        }
                     }
                     
                     if (attempt > 0) {
@@ -2113,11 +2081,13 @@ class ScreenCaptureService : Service() {
 
                                 val rowPadding = rowStride - pixelStride * width
                                 val tempBitmap = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
-                                buffer.rewind()
-                                tempBitmap.copyPixelsFromBuffer(buffer)
-
-                                val bitmap = Bitmap.createBitmap(tempBitmap, 0, 0, width, height)
-                                tempBitmap.recycle()
+                                val bitmap = try {
+                                    buffer.rewind()
+                                    tempBitmap.copyPixelsFromBuffer(buffer)
+                                    Bitmap.createBitmap(tempBitmap, 0, 0, width, height)
+                                } finally {
+                                    tempBitmap.recycle()
+                                }
 
                                 if (!bitmapDeferred.complete(bitmap)) {
                                     bitmap.recycle()
@@ -2194,34 +2164,24 @@ class ScreenCaptureService : Service() {
     }
 
     private suspend fun updateSlotSuccess(slotId: String) {
-        val json = preferencesRepository.geminiKeySlotsMetadataFlow.first()
-        val slots = GeminiKeySlotSerializer.deserialize(json).toMutableList()
-        val index = slots.indexOfFirst { it.id == slotId }
-        if (index >= 0) {
-            val s = slots[index]
-            slots[index] = s.copy(
+        preferencesRepository.updateGeminiKeySlot(slotId) { slot ->
+            slot.copy(
                 healthStatus = GeminiKeyHealth.READY.name,
                 lastSuccessTimestamp = System.currentTimeMillis(),
                 lastFailureType = "",
                 cooldownExpiration = 0L
             )
-            preferencesRepository.setGeminiKeySlotsMetadata(GeminiKeySlotSerializer.serialize(slots))
         }
     }
 
     private suspend fun updateSlotStatus(slotId: String, health: String, failureType: String, cooldown: Long) {
-        val json = preferencesRepository.geminiKeySlotsMetadataFlow.first()
-        val slots = GeminiKeySlotSerializer.deserialize(json).toMutableList()
-        val index = slots.indexOfFirst { it.id == slotId }
-        if (index >= 0) {
-            val s = slots[index]
+        preferencesRepository.updateGeminiKeySlot(slotId) { slot ->
             val cooldownExp = if (cooldown > 0) System.currentTimeMillis() + cooldown else 0L
-            slots[index] = s.copy(
+            slot.copy(
                 healthStatus = health,
                 lastFailureType = failureType,
                 cooldownExpiration = cooldownExp
             )
-            preferencesRepository.setGeminiKeySlotsMetadata(GeminiKeySlotSerializer.serialize(slots))
         }
     }
 
@@ -2304,6 +2264,19 @@ class ScreenCaptureService : Service() {
                 )
                 if (clipboardResult is EssayClipboardResult.Failed) {
                     Log.w(TAG, "Essay answer clipboard copy failed: ${clipboardResult.safeReason}")
+                }
+                try {
+                    if (preferencesRepository.essayNotificationEnabledFlow.first()) {
+                        when (val notification = EssayAnswerNotificationManager.showAnswer(applicationContext, parsed.answerText)) {
+                            is EssayNotificationResult.Failed -> Log.w(TAG, "Essay notification failed: ${notification.safeReason}")
+                            EssayNotificationResult.PermissionDenied -> Log.i(TAG, "Essay notification permission denied")
+                            EssayNotificationResult.Posted -> Unit
+                        }
+                    }
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    Log.w(TAG, "Essay notification preference unavailable: ${e.javaClass.simpleName}")
                 }
                 historyQuestionType = HistoryQuestionType.FREE_RESPONSE
                 historyAnswerIndex = 0
@@ -2654,9 +2627,7 @@ class ScreenCaptureService : Service() {
         try {
             kotlinx.coroutines.runBlocking {
                 kotlinx.coroutines.withTimeout(250) {
-                    preferencesRepository.updateSessionGracefulShutdown(graceful)
-                    preferencesRepository.updateSessionShutdownReason(reason)
-                    preferencesRepository.updateSessionServiceStarted(false)
+                    preferencesRepository.updateSessionShutdown(graceful, reason)
                 }
             }
         } catch (e: Exception) {
@@ -2724,7 +2695,7 @@ class ScreenCaptureService : Service() {
         val graceful = shutdownInProgress.get()
         val finalReason = terminalShutdownReason
             ?: if (graceful) "SERVICE_STOPPED" else "SERVICE_DESTROYED_UNEXPECTED"
-        writeShutdownJournal(graceful, finalReason)
+        if (!graceful) writeShutdownJournal(false, finalReason)
         performCleanup("SERVICE_DESTROYED")
         serviceScope.cancel()
         super.onDestroy()

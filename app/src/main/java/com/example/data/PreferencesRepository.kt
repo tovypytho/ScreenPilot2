@@ -44,6 +44,9 @@ class PreferencesRepository(private val context: Context) {
         val KEY_STRATEGY = stringPreferencesKey("key_strategy")
         val LAST_SUCCESSFUL_KEY_ID = stringPreferencesKey("last_successful_key_id")
         val ROUND_ROBIN_LAST_KEY_INDEX = intPreferencesKey("round_robin_last_key_index")
+        val ROUND_ROBIN_LAST_SLOT_ID = stringPreferencesKey("round_robin_last_slot_id")
+        val KEY_STRATEGY_MIGRATED = booleanPreferencesKey("key_strategy_migrated")
+        val ESSAY_NOTIFICATION_ENABLED = booleanPreferencesKey("essay_notification_enabled")
         val MAX_KEY_ATTEMPTS = intPreferencesKey("max_key_attempts")
         val SAME_KEY_RETRY_ENABLED = booleanPreferencesKey("same_key_retry_enabled")
         val COOLDOWN_DURATION_SEC = intPreferencesKey("cooldown_duration_sec")
@@ -91,6 +94,13 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun updateSessionId(value: String) {
         context.dataStore.edit { prefs -> prefs[SESSION_ID] = value }
+    }
+    suspend fun updateSessionShutdown(graceful: Boolean, reason: String) {
+        context.dataStore.edit { prefs ->
+            prefs[SESSION_GRACEFUL_SHUTDOWN] = graceful
+            prefs[SESSION_SHUTDOWN_REASON] = reason
+            prefs[SESSION_SERVICE_STARTED] = false
+        }
     }
     suspend fun updateSessionActivationTime(value: Long) {
         context.dataStore.edit { prefs -> prefs[SESSION_ACTIVATION_TIME] = value }
@@ -257,7 +267,61 @@ class PreferencesRepository(private val context: Context) {
     }
 
     val keyStrategyFlow: Flow<String> = context.dataStore.data.map { prefs ->
-        prefs[KEY_STRATEGY] ?: ScreenPilotPreferenceDefaults.KEY_STRATEGY
+        if (prefs[KEY_STRATEGY_MIGRATED] != true) {
+            ScreenPilotPreferenceDefaults.KEY_STRATEGY
+        } else prefs[KEY_STRATEGY] ?: ScreenPilotPreferenceDefaults.KEY_STRATEGY
+    }
+    val essayNotificationEnabledFlow: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[ESSAY_NOTIFICATION_ENABLED] ?: false
+    }
+
+    suspend fun setEssayNotificationEnabled(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[ESSAY_NOTIFICATION_ENABLED] = value }
+    }
+
+    suspend fun migrateKeyStrategyIfNeeded() {
+        context.dataStore.edit { prefs ->
+            if (prefs[KEY_STRATEGY_MIGRATED] != true) {
+                prefs[KEY_STRATEGY] = ScreenPilotPreferenceDefaults.KEY_STRATEGY
+                prefs[KEY_STRATEGY_MIGRATED] = true
+            }
+        }
+    }
+
+    /** Reserves the next starting slot atomically before any network request begins. */
+    suspend fun reserveKeyOrder(eligible: List<GeminiKeySlot>): List<GeminiKeySlot> {
+        if (eligible.isEmpty()) return emptyList()
+        val sorted = eligible.sortedWith(compareBy<GeminiKeySlot> { it.priority }.thenBy { it.id.toIntOrNull() ?: Int.MAX_VALUE })
+        var ordered = sorted
+        context.dataStore.edit { prefs ->
+            if (prefs[KEY_STRATEGY_MIGRATED] != true) {
+                prefs[KEY_STRATEGY] = ScreenPilotPreferenceDefaults.KEY_STRATEGY
+                prefs[KEY_STRATEGY_MIGRATED] = true
+            }
+            when (prefs[KEY_STRATEGY] ?: ScreenPilotPreferenceDefaults.KEY_STRATEGY) {
+                "Round Robin" -> {
+                    val lastId = prefs[ROUND_ROBIN_LAST_SLOT_ID]
+                    val lastPosition = sorted.indexOfFirst { it.id == lastId }
+                    val start = if (lastPosition < 0) 0 else (lastPosition + 1) % sorted.size
+                    ordered = sorted.drop(start) + sorted.take(start)
+                    prefs[ROUND_ROBIN_LAST_SLOT_ID] = ordered.first().id
+                }
+                "Sticky Success with Sequential Failover" -> {
+                    val lastId = prefs[LAST_SUCCESSFUL_KEY_ID]
+                    ordered = sorted.firstOrNull { it.id == lastId }?.let { listOf(it) + sorted.filterNot { slot -> slot.id == it.id } } ?: sorted
+                }
+            }
+        }
+        return ordered
+    }
+
+    suspend fun updateGeminiKeySlot(id: String, update: (GeminiKeySlot) -> GeminiKeySlot) {
+        context.dataStore.edit { prefs ->
+            val slots = GeminiKeySlotSerializer.deserialize(prefs[GEMINI_KEY_SLOTS_METADATA] ?: "")
+            prefs[GEMINI_KEY_SLOTS_METADATA] = GeminiKeySlotSerializer.serialize(
+                slots.map { if (it.id == id) update(it) else it }
+            )
+        }
     }
 
     val lastSuccessfulKeyIdFlow: Flow<String> = context.dataStore.data.map { prefs ->
@@ -489,7 +553,10 @@ class PreferencesRepository(private val context: Context) {
     }
 
     suspend fun setKeyStrategy(value: String) {
-        context.dataStore.edit { prefs -> prefs[KEY_STRATEGY] = value }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_STRATEGY] = value
+            prefs[KEY_STRATEGY_MIGRATED] = true
+        }
     }
 
     suspend fun setLastSuccessfulKeyId(value: String) {
@@ -593,6 +660,8 @@ class PreferencesRepository(private val context: Context) {
             prefs.remove(KEY_STRATEGY)
             prefs.remove(LAST_SUCCESSFUL_KEY_ID)
             prefs.remove(ROUND_ROBIN_LAST_KEY_INDEX)
+            prefs.remove(ROUND_ROBIN_LAST_SLOT_ID)
+            prefs.remove(ESSAY_NOTIFICATION_ENABLED)
             prefs.remove(MAX_KEY_ATTEMPTS)
             prefs.remove(SAME_KEY_RETRY_ENABLED)
             prefs.remove(COOLDOWN_DURATION_SEC)

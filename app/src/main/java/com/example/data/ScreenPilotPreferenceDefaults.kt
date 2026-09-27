@@ -7,7 +7,7 @@ package com.example.data
 object ScreenPilotPreferenceDefaults {
     const val DISMISS_TIMEOUT_SEC = 5L
     const val DISPLAY_ERROR_SYMBOL = false
-    const val KEY_STRATEGY = "Sticky Success with Sequential Failover"
+    const val KEY_STRATEGY = "Round Robin"
     const val ROUND_ROBIN_LAST_KEY_INDEX = 0
     const val MAX_KEY_ATTEMPTS = 10
     const val SAME_KEY_RETRY_ENABLED = true

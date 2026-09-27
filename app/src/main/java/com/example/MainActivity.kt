@@ -121,6 +121,7 @@ import com.example.service.ProviderGateway
 import com.example.service.AiProvider
 import com.example.service.AnalysisRequestContext
 import com.example.service.GeminiProviderClient
+import com.example.service.GeminiKeyChecker
 import com.example.service.LocalPreparationException
 import com.example.service.ParsedAnswer
 import androidx.compose.material3.CircularProgressIndicator
@@ -129,6 +130,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Send
 import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -151,6 +155,29 @@ class MainActivity : ComponentActivity() {
                 MainScreen()
             }
         }
+    }
+}
+
+private suspend fun checkAndSaveKeySlot(
+    repository: PreferencesRepository,
+    slotId: String,
+    key: String,
+    baseUrl: String,
+    model: String,
+    cooldownSeconds: Int
+) {
+    val result = GeminiKeyChecker.check(key, baseUrl, model, cooldownSeconds)
+    val checkedAt = System.currentTimeMillis()
+    repository.updateGeminiKeySlot(slotId) { slot ->
+        slot.copy(
+            healthStatus = result.health.name,
+            lastFailureType = if (result.health == GeminiKeyHealth.READY) "" else result.reason,
+            lastSuccessTimestamp = if (result.health == GeminiKeyHealth.READY) checkedAt else slot.lastSuccessTimestamp,
+            lastCheckedTimestamp = checkedAt,
+            lastCheckStatus = result.health.name,
+            lastCheckReason = result.reason,
+            cooldownExpiration = if (result.cooldownMs > 0) checkedAt + result.cooldownMs else 0L
+        )
     }
 }
 
@@ -272,7 +299,8 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
     val historyLimit by preferencesRepository.historyLimitFlow.collectAsState(initial = 30)
 
     val geminiKeySlotsMetadata by preferencesRepository.geminiKeySlotsMetadataFlow.collectAsState(initial = "")
-    val keyStrategy by preferencesRepository.keyStrategyFlow.collectAsState(initial = "Sticky Success with Sequential Failover")
+    val keyStrategy by preferencesRepository.keyStrategyFlow.collectAsState(initial = "Round Robin")
+    val essayNotificationEnabled by preferencesRepository.essayNotificationEnabledFlow.collectAsState(initial = false)
     val maxKeyAttempts by preferencesRepository.maxKeyAttemptsFlow.collectAsState(initial = 10)
     val cooldownDurationSec by preferencesRepository.cooldownDurationSecFlow.collectAsState(initial = 60)
     val skipCoolingDown by preferencesRepository.skipCoolingDownFlow.collectAsState(initial = true)
@@ -319,9 +347,13 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
     // Test API Key state
     var isTestingGeminiApi by remember { mutableStateOf(false) }
     var geminiApiTestResult by remember { mutableStateOf<String?>(null) }
+    var checkingSlotId by remember { mutableStateOf<String?>(null) }
+    var keyCheckJob by remember { mutableStateOf<Job?>(null) }
+    var keyCheckError by remember { mutableStateOf<String?>(null) }
 
     // Refresh permission statuses periodically on resume / launch
     LaunchedEffect(Unit) {
+        preferencesRepository.migrateKeyStrategyIfNeeded()
         hasOverlayPermission = Settings.canDrawOverlays(context)
         val hasKey = withContext(Dispatchers.IO) {
             KeyStoreHelper.retrieveGeminiApiKey(context).isNotEmpty()
@@ -825,7 +857,11 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             label = finalLabel,
                                             enabled = true,
                                             priority = priorityVal,
-                                            healthStatus = GeminiKeyHealth.READY.name,
+                                            healthStatus = GeminiKeyHealth.NOT_TESTED.name,
+                                            lastCheckedTimestamp = 0L,
+                                            lastCheckStatus = "",
+                                            lastCheckReason = "",
+                                            lastFailureType = "",
                                             maskedSuffix = suffix
                                         )
                                     } else {
@@ -835,7 +871,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             enabled = true,
                                             priority = priorityVal,
                                             maskedSuffix = suffix,
-                                            healthStatus = GeminiKeyHealth.READY.name
+                                            healthStatus = GeminiKeyHealth.NOT_TESTED.name
                                         ))
                                     }
                                     
@@ -853,6 +889,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                 .fillMaxWidth()
                                 .height(44.dp)
                                 .testTag("submit_api_key_slot_quick_button"),
+                            enabled = keyCheckJob == null,
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                         ) {
                             Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1016,7 +1053,11 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             label = finalLabel,
                                             enabled = true,
                                             priority = priorityVal,
-                                            healthStatus = GeminiKeyHealth.READY.name,
+                                            healthStatus = GeminiKeyHealth.NOT_TESTED.name,
+                                            lastCheckedTimestamp = 0L,
+                                            lastCheckStatus = "",
+                                            lastCheckReason = "",
+                                            lastFailureType = "",
                                             maskedSuffix = suffix
                                         )
                                     } else {
@@ -1026,7 +1067,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             enabled = true,
                                             priority = priorityVal,
                                             maskedSuffix = suffix,
-                                            healthStatus = GeminiKeyHealth.READY.name
+                                            healthStatus = GeminiKeyHealth.NOT_TESTED.name
                                         ))
                                     }
                                     
@@ -1043,7 +1084,8 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("submit_api_key_slot_button")
+                                .testTag("submit_api_key_slot_button"),
+                            enabled = keyCheckJob == null
                         ) {
                             Icon(imageVector = Icons.Default.Save, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
@@ -1197,11 +1239,45 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                         Text("Manage Individual Slots (1 to 10)", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        val slots: List<GeminiKeySlot> = GeminiKeySlotSerializer.deserialize(geminiKeySlotsMetadata)
+                        val slots: List<GeminiKeySlot> = remember(geminiKeySlotsMetadata) {
+                            GeminiKeySlotSerializer.deserialize(geminiKeySlotsMetadata)
+                        }
                         var editingSlot by remember { mutableStateOf<GeminiKeySlot?>(null) }
                         var editedKeyText by remember { mutableStateOf("") }
                         var editedLabelText by remember { mutableStateOf("") }
                         var editedPriorityText by remember { mutableStateOf("1") }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Button(
+                                onClick = {
+                                    keyCheckError = null
+                                    val job = coroutineScope.launch(start = CoroutineStart.LAZY) {
+                                        try {
+                                            for (slot in slots.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }) {
+                                                val key = withContext(Dispatchers.IO) { KeyStoreHelper.retrieveSlotKey(context, slot.id) }
+                                                if (key.isBlank() && slot.healthStatus == GeminiKeyHealth.NOT_CONFIGURED.name) continue
+                                                checkingSlotId = slot.id
+                                                checkAndSaveKeySlot(preferencesRepository, slot.id, key, geminiBaseUrl, geminiModel, cooldownDurationSec)
+                                            }
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            keyCheckError = "Pemeriksaan berhenti: ${e.javaClass.simpleName}"
+                                        } finally { checkingSlotId = null; keyCheckJob = null }
+                                    }
+                                    keyCheckJob = job
+                                    job.start()
+                                },
+                                enabled = keyCheckJob == null,
+                                modifier = Modifier.testTag("check_all_keys_button")
+                            ) { Text("Cek Semua") }
+                            if (keyCheckJob != null) {
+                                TextButton(onClick = { keyCheckJob?.cancel() }) { Text("Batal") }
+                            }
+                            checkingSlotId?.let { Text("Slot #$it", fontSize = 11.sp) }
+                        }
+                        Text("Pemeriksaan mengirim jawaban singkat dan memakai kuota Gemini.", fontSize = 11.sp, color = Color.Gray)
+                        Text("Key dari proyek Google Cloud yang sama berbagi kuota.", fontSize = 11.sp, color = Color.Gray)
+                        keyCheckError?.let { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.error) }
 
                         slots.forEach { slot ->
                             Card(
@@ -1238,7 +1314,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             // Status Indicator
                                             val statusText = when (slot.healthStatus) {
-                                                GeminiKeyHealth.READY.name -> "Ready"
+                                                GeminiKeyHealth.READY.name -> if (slot.lastCheckedTimestamp > 0L || slot.lastSuccessTimestamp > 0L) "Ready" else "Not Tested"
                                                 GeminiKeyHealth.COOLDOWN.name -> "Cooldown"
                                                 GeminiKeyHealth.AUTH_FAILED.name -> "Auth Failed"
                                                 GeminiKeyHealth.PERMISSION_DENIED.name -> "Permission Denied"
@@ -1271,11 +1347,39 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                                 }
                                             }
                                         }
+                                        if (slot.lastCheckedTimestamp > 0L) {
+                                            Text(
+                                                "Dicek: ${java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(Date(slot.lastCheckedTimestamp))} · ${if (slot.lastCheckStatus == GeminiKeyHealth.READY.name) "Berhasil" else slot.lastCheckReason}",
+                                                fontSize = 10.sp,
+                                                color = Color.Gray
+                                            )
+                                        }
                                     }
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(
+                                            onClick = {
+                                                keyCheckError = null
+                                                val job = coroutineScope.launch(start = CoroutineStart.LAZY) {
+                                                    checkingSlotId = slot.id
+                                                    try {
+                                                        val key = withContext(Dispatchers.IO) { KeyStoreHelper.retrieveSlotKey(context, slot.id) }
+                                                        checkAndSaveKeySlot(preferencesRepository, slot.id, key, geminiBaseUrl, geminiModel, cooldownDurationSec)
+                                                    } catch (e: CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        keyCheckError = "Slot #${slot.id}: ${e.javaClass.simpleName}"
+                                                    } finally { checkingSlotId = null; keyCheckJob = null }
+                                                }
+                                                keyCheckJob = job
+                                                job.start()
+                                            },
+                                            enabled = keyCheckJob == null,
+                                            modifier = Modifier.testTag("check_key_slot_${slot.id}")
+                                        ) { Text("Cek", fontSize = 11.sp) }
                                         Switch(
                                             checked = slot.enabled,
+                                            enabled = keyCheckJob == null,
                                             onCheckedChange = { checked ->
                                                 coroutineScope.launch {
                                                     val updatedList = slots.map {
@@ -1289,7 +1393,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             modifier = Modifier.scale(0.7f)
                                         )
 
-                                        IconButton(onClick = {
+                                        IconButton(enabled = keyCheckJob == null, onClick = {
                                             editingSlot = slot
                                             editedKeyText = "" // keep blank to avoid showing full key
                                             editedLabelText = slot.label
@@ -1298,7 +1402,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                             Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Key Slot", modifier = Modifier.size(18.dp))
                                         }
 
-                                        IconButton(onClick = {
+                                        IconButton(enabled = keyCheckJob == null, onClick = {
                                             coroutineScope.launch {
                                                 withContext(Dispatchers.IO) {
                                                     KeyStoreHelper.clearSlotKey(context, slot.id)
@@ -1359,7 +1463,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                     }
                                 },
                                 confirmButton = {
-                                    Button(onClick = {
+                                    Button(enabled = keyCheckJob == null, onClick = {
                                         val priorityVal = editedPriorityText.toIntOrNull() ?: 1
                                         coroutineScope.launch {
                                             var storeSuccess = true
@@ -1380,7 +1484,11 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                                         it.copy(
                                                             label = editedLabelText,
                                                             priority = priorityVal,
-                                                            healthStatus = if (editedKeyText.isNotEmpty() || (it.healthStatus != GeminiKeyHealth.NOT_CONFIGURED.name && it.healthStatus != "NOT_CONFIGURED")) GeminiKeyHealth.READY.name else GeminiKeyHealth.NOT_CONFIGURED.name,
+                                                            healthStatus = if (editedKeyText.isNotEmpty()) GeminiKeyHealth.NOT_TESTED.name else it.healthStatus,
+                                                            lastCheckedTimestamp = if (editedKeyText.isNotEmpty()) 0L else it.lastCheckedTimestamp,
+                                                            lastCheckStatus = if (editedKeyText.isNotEmpty()) "" else it.lastCheckStatus,
+                                                            lastCheckReason = if (editedKeyText.isNotEmpty()) "" else it.lastCheckReason,
+                                                            lastFailureType = if (editedKeyText.isNotEmpty()) "" else it.lastFailureType,
                                                             enabled = true
                                                         )
                                                     } else it
@@ -2190,36 +2298,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                                     throw LocalPreparationException("No Gemini API keys are configured or enabled in your pool.")
                                                 }
 
-                                                val strategy = preferencesRepository.keyStrategyFlow.first()
-                                                val lastSuccessId = preferencesRepository.lastSuccessfulKeyIdFlow.first()
-                                                val lastRrIndex = preferencesRepository.roundRobinLastKeyIndexFlow.first()
-
-                                                val orderedSlots = when (strategy) {
-                                                    "Sticky Success with Sequential Failover" -> {
-                                                        val stickyIndex = enabledSlots.indexOfFirst { it.id == lastSuccessId }
-                                                        if (stickyIndex >= 0) {
-                                                            val list = mutableListOf<GeminiKeySlot>()
-                                                            list.add(enabledSlots[stickyIndex])
-                                                            for (i in enabledSlots.indices) {
-                                                                if (i != stickyIndex) list.add(enabledSlots[i])
-                                                            }
-                                                            list
-                                                        } else enabledSlots
-                                                    }
-                                                    "Always Start at Key 1" -> enabledSlots
-                                                    "Round Robin" -> {
-                                                        if (enabledSlots.isNotEmpty()) {
-                                                            val startIndex = (lastRrIndex + 1) % enabledSlots.size
-                                                            val list = mutableListOf<GeminiKeySlot>()
-                                                            for (i in enabledSlots.indices) {
-                                                                val idx = (startIndex + i) % enabledSlots.size
-                                                                list.add(enabledSlots[idx])
-                                                            }
-                                                            list
-                                                        } else enabledSlots
-                                                    }
-                                                    else -> enabledSlots
-                                                }
+                                                 val orderedSlots = preferencesRepository.reserveKeyOrder(enabledSlots)
 
                                                 val maxAttempts = preferencesRepository.maxKeyAttemptsFlow.first()
                                                 val attemptsLimit = kotlin.math.min(maxAttempts, orderedSlots.size)
@@ -2382,6 +2461,20 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                                 fontSize = 11.sp,
                                 color = Color.Gray
                             )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Notifikasi jawaban essay", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                                Switch(
+                                    checked = essayNotificationEnabled,
+                                    onCheckedChange = { enabled ->
+                                        coroutineScope.launch { preferencesRepository.setEssayNotificationEnabled(enabled) }
+                                    },
+                                    modifier = Modifier.testTag("essay_notification_toggle")
+                                )
+                            }
+                            Text("Senyap; isi jawaban disembunyikan di layar kunci. Clipboard selalu aktif.", fontSize = 11.sp, color = Color.Gray)
+                            if (essayNotificationEnabled && !hasNotificationPermission) {
+                                Text("Izin notifikasi belum aktif; jawaban tetap tersalin ke clipboard.", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                            }
 
                             testOutput?.let { out ->
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -2584,7 +2677,7 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                             Text("• Projection session: ${if (sessionProjectionInitialized) "Initialized" else "Not initialized"}", fontSize = 12.sp)
                             Text("• Foreground promoted: ${if (sessionForegroundPromoted) "Yes" else "No"}", fontSize = 12.sp)
                         } else {
-                            Text("• Last Closed Session Reason: ${sessionShutdownReason.ifEmpty { "Graceful User Stop" }}", fontSize = 12.sp)
+                            Text("• Last Closed Session Reason: ${if (sessionShutdownReason == "PROJECTION_REVOKED") "Screen capture stopped by Android; start a new session" else sessionShutdownReason.ifEmpty { "Graceful User Stop" }}", fontSize = 12.sp)
                             Text("• Last Shutdown Was Graceful: ${if (sessionGracefulShutdown) "Yes" else "No"}", fontSize = 12.sp)
                         }
                         

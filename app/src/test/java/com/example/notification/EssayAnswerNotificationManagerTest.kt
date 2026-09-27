@@ -40,7 +40,7 @@ class EssayAnswerNotificationManagerTest {
     }
 
     @Test
-    fun essayAnswerUsesPublicBigTextReplacementAndTapIntent() {
+    fun essayAnswerHidesLockScreenTextAndKeepsTapIntent() {
         val answer = "Fotosintesis mengubah energi cahaya menjadi energi kimia yang disimpan dalam bentuk glukosa."
         val result = EssayAnswerNotificationManager.showAnswer(context, answer)
         assertTrue(result is EssayNotificationResult.Posted)
@@ -50,17 +50,14 @@ class EssayAnswerNotificationManagerTest {
         assertEquals(EssayAnswerNotificationManager.NOTIFICATION_ID, active[0].id)
 
         val notification = active[0].notification
-        assertEquals(Notification.VISIBILITY_PUBLIC, notification.visibility)
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
         assertEquals(answer, notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
         assertNotNull(notification.contentIntent)
 
         val publicVersion = notification.publicVersion
         assertNotNull(publicVersion)
         assertEquals(Notification.VISIBILITY_PUBLIC, publicVersion.visibility)
-        assertEquals(
-            answer,
-            publicVersion.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
-        )
+        assertTrue(publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.contains(answer) != true)
         assertNotNull(publicVersion.contentIntent)
     }
 
