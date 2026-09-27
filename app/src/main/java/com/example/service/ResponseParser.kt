@@ -28,8 +28,6 @@ sealed interface ParsedAnswer {
 }
 
 object ResponseParser {
-    private const val MAX_FREE_RESPONSE_CHARS = 500
-
     fun extractGeminiText(responseJson: String): String {
         val root = JSONObject(responseJson)
         val candidates = root.optJSONArray("candidates")
@@ -38,6 +36,9 @@ object ResponseParser {
             throw IllegalArgumentException("Blocked response or empty generation (0 candidates).")
         }
         val candidate = candidates.getJSONObject(0)
+        if (candidate.optString("finishReason") == "MAX_TOKENS") {
+            throw IllegalArgumentException("Gemini response is incomplete (MAX_TOKENS).")
+        }
         val content = candidate.optJSONObject("content")
             ?: throw IllegalArgumentException("Blocked response or empty generation (no content).")
         val parts = content.optJSONArray("parts")
@@ -194,14 +195,7 @@ object ResponseParser {
             throw IllegalArgumentException("answer_text is empty")
         }
 
-        // Keep notification/history payloads bounded even if the provider ignores
-        // the concise-answer instruction. Truncation is safer than turning a valid
-        // provider answer into a key-failover condition.
-        return if (normalized.length <= MAX_FREE_RESPONSE_CHARS) {
-            normalized
-        } else {
-            normalized.take(MAX_FREE_RESPONSE_CHARS - 1).trimEnd() + "…"
-        }
+        return normalized
     }
 
     private fun parseConfidence(json: JSONObject): Double? {

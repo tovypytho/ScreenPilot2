@@ -6,7 +6,7 @@ Current answer modes:
 
 - **Single-answer multiple choice**: ScreenPilot recognizes radio-style/circular controls and returns one selected answer index through the compact overlay popup.
 - **Multiple-select questions**: ScreenPilot recognizes checkbox-style/square controls or explicit multi-answer wording and returns all correct indices in a compact form such as `(1,2)`.
-- **Free response / essay**: ScreenPilot posts a concise answer silently to the Android notification shade.
+- **Free response / essay**: ScreenPilot copies the answer to the Android clipboard automatically, ready to paste, and saves it in history. The essay answer notification is temporarily disabled.
 - **Unclear / incomplete capture**: no answer is fabricated and no API-key failover is triggered solely because the visible question is incomplete.
 
 The app supports both normal single-screenshot analysis and the staged two-long-press flow for questions that span more than one screen.

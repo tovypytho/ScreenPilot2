@@ -73,6 +73,8 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
+import com.example.clipboard.EssayAnswerClipboardManager
+import com.example.clipboard.EssayClipboardResult
 import com.example.data.AppDatabase
 import com.example.data.HistoryEntry
 import com.example.data.HistoryRepository
@@ -84,8 +86,6 @@ import com.example.data.AnswerPopupStyle
 import com.example.data.GeminiKeySlot
 import com.example.data.GeminiKeySlotSerializer
 import com.example.data.GeminiKeyHealth
-import com.example.notification.EssayAnswerNotificationManager
-import com.example.notification.EssayNotificationResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -2259,7 +2259,7 @@ class ScreenCaptureService : Service() {
         // A parsed UNCLEAR result is a valid provider response, not a key failure.
         // Presentation depends only on the parsed answer type:
         // Single MC and multi-select -> existing overlay popup,
-        // FREE_RESPONSE -> silent notification,
+        // FREE_RESPONSE -> clipboard,
         // UNCLEAR -> no fabricated answer and no provider failover.
         val historyQuestionType: String
         val historyAnswerIndex: Int
@@ -2298,17 +2298,12 @@ class ScreenCaptureService : Service() {
             }
 
             is ParsedAnswer.FreeResponse -> {
-                when (val notificationResult = EssayAnswerNotificationManager.showAnswer(
+                val clipboardResult = EssayAnswerClipboardManager.copy(
                     applicationContext,
                     parsed.answerText
-                )) {
-                    EssayNotificationResult.Posted -> Unit
-                    EssayNotificationResult.PermissionDenied -> {
-                        Log.w(TAG, "Essay answer notification skipped: notification permission unavailable")
-                    }
-                    is EssayNotificationResult.Failed -> {
-                        Log.w(TAG, "Essay answer notification failed: ${notificationResult.safeReason}")
-                    }
+                )
+                if (clipboardResult is EssayClipboardResult.Failed) {
+                    Log.w(TAG, "Essay answer clipboard copy failed: ${clipboardResult.safeReason}")
                 }
                 historyQuestionType = HistoryQuestionType.FREE_RESPONSE
                 historyAnswerIndex = 0

@@ -81,13 +81,12 @@ class ResponseParserTest {
     }
 
     @Test
-    fun freeResponseLongTextIsBoundedInsteadOfFailing() {
+    fun freeResponseLongTextIsPreservedWithoutTruncation() {
         val longText = "a".repeat(700)
         val result = ResponseParser.parse(
             """{"question_type":"FREE_RESPONSE","answer_text":"$longText"}"""
         ) as ParsedAnswer.FreeResponse
-        assertEquals(500, result.answerText.length)
-        assertTrue(result.answerText.endsWith("…"))
+        assertEquals(longText, result.answerText)
     }
 
     @Test
@@ -233,6 +232,28 @@ class ResponseParserTest {
             })
         }.toString()
         assertEquals(expected, ResponseParser.extractGeminiText(response))
+    }
+
+    @Test
+    fun extractGeminiTextRejectsMaxTokensEvenWhenPartialTextExists() {
+        val response = org.json.JSONObject().apply {
+            put("candidates", org.json.JSONArray().apply {
+                put(org.json.JSONObject().apply {
+                    put("finishReason", "MAX_TOKENS")
+                    put("content", org.json.JSONObject().apply {
+                        put("parts", org.json.JSONArray().apply {
+                            put(org.json.JSONObject().apply { put("text", "partial answer") })
+                        })
+                    })
+                })
+            })
+        }.toString()
+        try {
+            ResponseParser.extractGeminiText(response)
+            fail("Expected incomplete generation to be rejected")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("MAX_TOKENS") == true)
+        }
     }
 
     private fun expectFailure(value: String) {

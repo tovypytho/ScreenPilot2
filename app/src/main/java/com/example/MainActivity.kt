@@ -2372,30 +2372,16 @@ fun MainScreen(apiKeyStore: ApiKeyStore = KeyStoreHelper) {
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Text(
-                                text = "Preview Feature Notifikasi Essay",
+                                text = "Jawaban Essay",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Mengirim contoh jawaban ke panel notifikasi.",
+                                text = "Jawaban essay otomatis disalin ke clipboard saat analisis selesai. Tempel di kolom jawaban yang dituju.",
                                 fontSize = 11.sp,
                                 color = Color.Gray
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    com.example.notification.EssayAnswerNotificationManager.showAnswer(
-                                        context,
-                                        "Fotosintesis mengubah energi cahaya menjadi energi kimia yang disimpan dalam bentuk glukosa."
-                                    )
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("test_essay_notification_button")
-                            ) {
-                                Text("Test Notifikasi Essay", fontSize = 12.sp)
-                            }
 
                             testOutput?.let { out ->
                                 Spacer(modifier = Modifier.height(8.dp))

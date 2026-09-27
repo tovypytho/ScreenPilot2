@@ -156,6 +156,7 @@ class ProviderGatewayTest {
 
         val json = org.json.JSONObject(buildGeminiImageRequestJson(contextObj, "ZmFrZQ=="))
         val generationConfig = json.getJSONObject("generationConfig")
+        assertTrue(!generationConfig.has("maxOutputTokens"))
         val schema = generationConfig.getJSONObject("response_schema")
         val properties = schema.getJSONObject("properties")
         val questionType = properties.getJSONObject("question_type")
@@ -183,6 +184,8 @@ class ProviderGatewayTest {
         assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("Do not assume", ignoreCase = true))
         assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("cropped", ignoreCase = true))
         assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("UNCLEAR"))
+        assertTrue(QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("every part the question asks"))
+        assertTrue(!QUESTION_ANALYSIS_SYSTEM_INSTRUCTION.contains("under 320 characters"))
     }
 
     @Test
